@@ -1,5 +1,105 @@
 # Changelog
 
+## [0.51.5](https://github.com/trycua/cua/compare/cua-driver-rs-v0.51.4...cua-driver-rs-v0.51.5) (2026-11-15)
+
+
+### Bug Fixes
+
+* **cua-driver:** refuse a live label held by another transport with session_owned_by_other_transport ([#7811](https://github.com/trycua/cua/issues/7811)) ([ac9c092](https://github.com/trycua/cua/commit/ac9c092abfc29517ec6e63513ad675a73f019b77))
+
+## [0.51.4](https://github.com/trycua/cua/compare/cua-driver-rs-v0.51.3...cua-driver-rs-v0.51.4) (2026-11-15)
+
+
+### Bug Fixes
+
+* **cua-driver:** drop the success glyph from unconfirmed action text ([#7806](https://github.com/trycua/cua/issues/7806)) ([0aab127](https://github.com/trycua/cua/commit/0aab1279811edba59d8ff95e41a0ebe1b4aaa107)), closes [#4723](https://github.com/trycua/cua/issues/4723)
+
+## [0.51.3](https://github.com/trycua/cua/compare/cua-driver-rs-v0.51.2...cua-driver-rs-v0.51.3) (2026-11-15)
+
+
+### Bug Fixes
+
+* **cua-driver-core:** advise only the retry that lifts each PARTIAL TREE cut ([#7800](https://github.com/trycua/cua/issues/7800)) ([7bb1254](https://github.com/trycua/cua/commit/7bb125461ed442e7e95eeb265fef5435c4c29f51))
+
+## [0.51.2](https://github.com/trycua/cua/compare/cua-driver-rs-v0.51.1...cua-driver-rs-v0.51.2) (2026-11-15)
+
+
+### Bug Fixes
+
+* **cua-driver:** accept --socket on permissions again so the hosted macOS gate can read daemon permissions ([#7796](https://github.com/trycua/cua/issues/7796)) ([1107fe5](https://github.com/trycua/cua/commit/1107fe5cd0af2b938eab2f855e3d9e4b76a2c2c5))
+* **cua-driver:** drop the nonexistent render --output from the recording usage error ([#7795](https://github.com/trycua/cua/issues/7795)) ([971c9ee](https://github.com/trycua/cua/commit/971c9eedd87ad433262915c3a7997dd3939b6600))
+* **cua-driver:** refuse macOS clicks when the observed control has changed ([#7789](https://github.com/trycua/cua/issues/7789)) ([edd51fa](https://github.com/trycua/cua/commit/edd51fa38d29ecb5f6e19ee6765351b4ef6650d1))
+
+
+### Reverts
+
+* **cua-driver:** put each tool description's first sentence on its own line ([#7790](https://github.com/trycua/cua/issues/7790)) ([193c2df](https://github.com/trycua/cua/commit/193c2df466d6f3f643892be0f081cb3c2481a480))
+
+## [0.51.1](https://github.com/trycua/cua/compare/cua-driver-rs-v0.51.0...cua-driver-rs-v0.51.1) (2026-11-15)
+
+
+### Bug Fixes
+
+* **cua-driver:** exit 64 when a command gets an option it does not take ([#7782](https://github.com/trycua/cua/issues/7782)) ([7995bc0](https://github.com/trycua/cua/commit/7995bc0c32bffacdb650d27548f02d72a175b75f))
+
+## [0.51.0](https://github.com/trycua/cua/compare/cua-driver-rs-v0.50.0...cua-driver-rs-v0.51.0) (2026-11-15)
+
+
+### Features
+
+* **cua-driver:** put each tool description's first sentence on its own line ([#7764](https://github.com/trycua/cua/issues/7764)) ([0147fb8](https://github.com/trycua/cua/commit/0147fb8d42c332a492c2154804069134f4e25e9c))
+* **cua-driver:** shorter shared parameter descriptions ([#7765](https://github.com/trycua/cua/issues/7765)) ([efec141](https://github.com/trycua/cua/commit/efec1417472f1cfd72ad5d83fe0d57e20aeedea9))
+
+
+### Bug Fixes
+
+* **cua-driver:** keep a text row that repeats an unindexed group's name in the macOS tree ([#7780](https://github.com/trycua/cua/issues/7780)) ([f460651](https://github.com/trycua/cua/commit/f46065190ac5d0a16583f7f74ea1155762276b86))
+* **cua-driver:** refuse an ended session on the daemon socket with session_ended ([#7775](https://github.com/trycua/cua/issues/7775)) ([f7cbc7e](https://github.com/trycua/cua/commit/f7cbc7e965589e2e1dd4ab633259f7221d67f9a5))
+
+## [0.50.0](https://github.com/trycua/cua/compare/cua-driver-rs-v0.49.12...cua-driver-rs-v0.50.0) (2026-11-14)
+
+
+### Features
+
+* **cua-driver:** add browser_motion_policy for driver-owned tabs ([#7734](https://github.com/trycua/cua/issues/7734)) ([c9b1eb7](https://github.com/trycua/cua/commit/c9b1eb760073826154d217d00fc178274b83e778))
+* **cua-driver:** background drag-and-drop on macOS ([#7730](https://github.com/trycua/cua/issues/7730)) ([361bc24](https://github.com/trycua/cua/commit/361bc2440ecfaf3882a035c7eeae868c04faf742))
+* **cua-driver:** set_value on LibreOffice Calc cells through the Name Box ([#7744](https://github.com/trycua/cua/issues/7744)) ([cf7642e](https://github.com/trycua/cua/commit/cf7642e231e9fbfacf0c8dfd4908be8335a35349))
+
+
+### Bug Fixes
+
+* **cua-driver:** capture the app's main window when an action closes its target window ([#7760](https://github.com/trycua/cua/issues/7760)) ([f41a0c5](https://github.com/trycua/cua/commit/f41a0c50a448bd3843f2167db4fa928d2bcbbcbe))
+* **cua-driver:** count a macOS AXOpen that replaced its own element ([#7757](https://github.com/trycua/cua/issues/7757)) ([b4e764f](https://github.com/trycua/cua/commit/b4e764f2fbe40884d99ee03195e39f781fa0241d))
+* **cua-driver:** keep a macOS menu command's window key within its app ([#7761](https://github.com/trycua/cua/issues/7761)) ([bb7e850](https://github.com/trycua/cua/commit/bb7e850cadddba0a25e6d7c46f4bb29441b1cea0))
+* **cua-driver:** keep named macOS accessibility groups in the tree ([#7762](https://github.com/trycua/cua/issues/7762)) ([555dac4](https://github.com/trycua/cua/commit/555dac439e61e89b1370e0d3cd75f9b6a84e434a))
+* **cua-driver:** release a background Command chord's base key without Command ([#7755](https://github.com/trycua/cua/issues/7755)) ([7af608b](https://github.com/trycua/cua/commit/7af608b205eb84c468e6d6978c7568703b3606d4))
+* **cua-driver:** report macOS 27 browser profile denials ([#7745](https://github.com/trycua/cua/issues/7745)) ([7893549](https://github.com/trycua/cua/commit/78935496488ffe3eef11999d50405481d79f1b0f))
+* **cua-driver:** report native Windows diagnostics ([#7763](https://github.com/trycua/cua/issues/7763)) ([8b2228a](https://github.com/trycua/cua/commit/8b2228a2d7608b3da8d5b416413016dcd11347a1))
+* **cua-driver:** run invoke_menu on a macOS window on another Space without raising it ([#7756](https://github.com/trycua/cua/issues/7756)) ([25dad98](https://github.com/trycua/cua/commit/25dad981a7599ba20ec09e5b9abab689c7d58dbd))
+* **cua-driver:** say when a refused Catalyst menu item leaves its menu open ([#7746](https://github.com/trycua/cua/issues/7746)) ([e97749d](https://github.com/trycua/cua/commit/e97749d219d771b0106ce6eaa892912f5f44202c))
+* **cua-driver:** send AXEnhancedUserInterface only to Chromium and Electron apps ([#7751](https://github.com/trycua/cua/issues/7751)) ([e02cf9f](https://github.com/trycua/cua/commit/e02cf9f9c71a36b8829c077a770b4c1919be6be7))
+
+## [0.49.12](https://github.com/trycua/cua/compare/cua-driver-rs-v0.49.11...cua-driver-rs-v0.49.12) (2026-11-14)
+
+
+### Bug Fixes
+
+* **cua-driver:** count focus in a window's inline rename field as focus on that window ([#7725](https://github.com/trycua/cua/issues/7725)) ([3026079](https://github.com/trycua/cua/commit/302607951843a2bab88efd5dd21799170e147357))
+
+## [0.49.11](https://github.com/trycua/cua/compare/cua-driver-rs-v0.49.10...cua-driver-rs-v0.49.11) (2026-11-14)
+
+
+### Bug Fixes
+
+* **cua-driver:** resolve Brave's default profile root on Linux and macOS ([#7717](https://github.com/trycua/cua/issues/7717)) ([e4d8c41](https://github.com/trycua/cua/commit/e4d8c411934aa89a4174bdd809915a66dd422377))
+
+## [0.49.10](https://github.com/trycua/cua/compare/cua-driver-rs-v0.49.9...cua-driver-rs-v0.49.10) (2026-11-14)
+
+
+### Bug Fixes
+
+* **cua-driver:** report a background web press the page ignored ([#7694](https://github.com/trycua/cua/issues/7694)) ([a486f93](https://github.com/trycua/cua/commit/a486f930ad4597e961828d00cff467b89ba3f711))
+
 ## [0.49.9](https://github.com/trycua/cua/compare/cua-driver-rs-v0.49.8...cua-driver-rs-v0.49.9) (2026-11-14)
 
 

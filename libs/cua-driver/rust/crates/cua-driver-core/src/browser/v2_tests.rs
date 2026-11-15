@@ -31,8 +31,9 @@ use super::platform::{
 use super::pointer::BrowserPointerTool;
 use super::refusal::BrowserRefusal;
 use super::tools::{
-    browser_protected_resource_scope, BrowserClickTool, BrowserDialogTool, BrowserNavigateTool,
-    BrowserPrepareTool, BrowserSelectTool, BrowserTypeTool, GetBrowserStateTool,
+    browser_protected_resource_scope, BrowserClickTool, BrowserDialogTool, BrowserMotionPolicyTool,
+    BrowserNavigateTool, BrowserPrepareTool, BrowserSelectTool, BrowserTypeTool,
+    GetBrowserStateTool,
 };
 use super::types::{
     BrowserClassification, BrowserEngineFamily, BrowserProcessRole, BrowserProduct,
@@ -78,6 +79,11 @@ pub(super) struct FixtureState {
     /// answer `Page.enable` on the new session.
     detach_dialog_session: bool,
     dialog_blocks_page: bool,
+    /// Fail the next `Emulation.setEmulatedMedia` after applying it, as a
+    /// lost reply would.
+    fail_next_emulated_media: bool,
+    /// Tab sessions Chromium no longer knows, as after an unseen detach.
+    gone_sessions: Vec<String>,
     /// Tab sessions that enabled the Page domain. Chromium reports a dialog
     /// to each of them, not to the session whose call opened it.
     page_sessions: Vec<String>,
@@ -89,6 +95,8 @@ pub(super) struct FixtureState {
     screenshot_data: String,
     viewport_css_width: f64,
     viewport_css_height: f64,
+    viewport_page_x: f64,
+    viewport_page_y: f64,
     tab_visible: bool,
     select_outcome: Value,
     /// Extra page targets Chromium reports but cannot map to any browser
@@ -152,6 +160,8 @@ impl Default for FixtureState {
             renderer_blocked: false,
             detach_dialog_session: false,
             dialog_blocks_page: false,
+            fail_next_emulated_media: false,
+            gone_sessions: Vec::new(),
             page_sessions: Vec::new(),
             semantic_large_page: false,
             semantic_html_style: String::new(),
@@ -161,6 +171,8 @@ impl Default for FixtureState {
             screenshot_data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZJrAAAAAASUVORK5CYII=".into(),
             viewport_css_width: 800.0,
             viewport_css_height: 600.0,
+            viewport_page_x: 0.0,
+            viewport_page_y: 0.0,
             tab_visible: true,
             select_outcome: Value::Null,
             dom_click_changes_readback: true,
@@ -677,8 +689,8 @@ fn fixture_handler(state: SharedState) -> MockHandler {
             )),
             "Page.getLayoutMetrics" => MockReply::ok(json!({
                 "cssVisualViewport": {
-                    "pageX": 0.0,
-                    "pageY": 0.0,
+                    "pageX": st.viewport_page_x,
+                    "pageY": st.viewport_page_y,
                     "clientWidth": st.viewport_css_width,
                     "clientHeight": st.viewport_css_height
                 }
@@ -904,6 +916,15 @@ fn fixture_handler(state: SharedState) -> MockHandler {
                     session_id: Some(sess.clone()),
                     params: json!({ "result": call.params["accept"], "userInput": "" }),
                 }])
+            }
+            "Emulation.setEmulatedMedia" if is_tab => {
+                if st.gone_sessions.contains(&sess) {
+                    MockReply::err(-32001, "Session with given id not found.")
+                } else if std::mem::take(&mut st.fail_next_emulated_media) {
+                    MockReply::err(-32000, "fixture lost reply")
+                } else {
+                    MockReply::ok(json!({}))
+                }
             }
             other => MockReply::method_not_found(other),
         }
@@ -2429,6 +2450,295 @@ async fn requested_tab_screenshot_refuses_malformed_image_data() {
         .all(|content| !matches!(content, Content::Image { .. })));
 }
 
+fn first_image(result: &ToolResult) -> (String, String) {
+    result
+        .content
+        .iter()
+        .find_map(|content| match content {
+            Content::Image {
+                data, mime_type, ..
+            } => Some((data.clone(), mime_type.clone())),
+            _ => None,
+        })
+        .expect("screenshot image content")
+}
+
+async fn tab_screenshot(f: &Fixture, options: Value) -> ToolResult {
+    let (target, tab) = bind(f).await;
+    let mut args = json!({
+        "target_id": target,
+        "tab_id": tab,
+        "session": SESSION,
+        "include_screenshot": true
+    });
+    for (key, value) in options.as_object().expect("options object") {
+        args[key] = value.clone();
+    }
+    GetBrowserStateTool::new(f.engine.clone())
+        .invoke(args)
+        .await
+}
+
+#[tokio::test]
+async fn requested_tab_screenshot_without_options_returns_endpoint_png_bytes() {
+    let f = fixture_with(|state| {
+        state.viewport_css_width = 2.0;
+        state.viewport_css_height = 1.0;
+        state.screenshot_data = screenshot_png_base64(4, 2);
+    })
+    .await;
+    let expected = f.state.lock().unwrap().screenshot_data.clone();
+    let result = tab_screenshot(&f, json!({})).await;
+    let snapshot = structured(&result);
+    assert_eq!(snapshot["status"], "ok", "{snapshot}");
+    assert_eq!(first_image(&result), (expected, "image/png".to_owned()));
+    assert_eq!(snapshot["screenshot_mime_type"], "image/png");
+    assert_eq!(snapshot["screenshot"]["mime_type"], "image/png");
+    assert_eq!(snapshot["screenshot_width"], 4);
+    assert_eq!(snapshot["screenshot_height"], 2);
+}
+
+#[tokio::test]
+async fn requested_tab_screenshot_encodes_jpeg_when_asked() {
+    let f = fixture_with(|state| {
+        state.viewport_css_width = 2.0;
+        state.viewport_css_height = 1.0;
+        state.screenshot_data = screenshot_png_base64(4, 2);
+    })
+    .await;
+    let result = tab_screenshot(
+        &f,
+        json!({"screenshot_format": "jpeg", "screenshot_quality": 80}),
+    )
+    .await;
+    let snapshot = structured(&result);
+    assert_eq!(snapshot["status"], "ok", "{snapshot}");
+    let (data, mime_type) = first_image(&result);
+    assert_eq!(mime_type, "image/jpeg");
+    let bytes = BASE64.decode(data).expect("base64 JPEG");
+    assert_eq!(&bytes[..3], &[0xFF, 0xD8, 0xFF]);
+    assert_eq!(snapshot["screenshot_mime_type"], "image/jpeg");
+    assert_eq!(snapshot["screenshot"]["mime_type"], "image/jpeg");
+    assert_eq!(snapshot["screenshot_width"], 4);
+    assert_eq!(snapshot["screenshot_height"], 2);
+}
+
+#[tokio::test]
+async fn screenshot_only_leaves_the_tab_snapshot_and_refs_untouched() {
+    let f = fixture_with(|state| state.screenshot_data = screenshot_png_base64(4, 2)).await;
+    let (target, tab) = bind(&f).await;
+    let snap = snapshot(&f, &target, &tab).await;
+    let button = ref_of(&snap, "main", "main-btn");
+    let walks = recorded_calls(&f, "DOM.getDocument").len();
+    assert!(walks > 0, "the snapshot must have walked the DOM");
+
+    let result = GetBrowserStateTool::new(f.engine.clone())
+        .invoke(json!({
+            "target_id": target,
+            "tab_id": tab,
+            "session": SESSION,
+            "include_snapshot": false,
+            "include_screenshot": true,
+            "screenshot_format": "jpeg",
+            "screenshot_quality": 80
+        }))
+        .await;
+    let shot = structured(&result);
+    assert_eq!(shot["status"], "ok", "{shot}");
+    assert_eq!(shot["mode"], "screenshot");
+    for key in ["snapshot_id", "refs", "outline", "url"] {
+        assert!(shot[key].is_null(), "{key} must be absent: {shot}");
+    }
+    assert_eq!(first_image(&result).1, "image/jpeg");
+    assert_eq!(shot["screenshot_mime_type"], "image/jpeg");
+    assert_eq!(recorded_calls(&f, "DOM.getDocument").len(), walks);
+    f.engine
+        .store
+        .resolve_ref(SESSION, &target, &tab, &button)
+        .expect("ref from the earlier snapshot stays valid");
+}
+
+#[tokio::test]
+async fn requested_tab_screenshot_scale_describes_the_downscaled_image() {
+    let f = fixture_with(|state| {
+        state.viewport_css_width = 200.0;
+        state.viewport_css_height = 100.0;
+        state.screenshot_data = screenshot_png_base64(400, 200);
+    })
+    .await;
+    let result = tab_screenshot(&f, json!({"max_image_dimension": 100})).await;
+    let snapshot = structured(&result);
+    assert_eq!(snapshot["status"], "ok", "{snapshot}");
+    let (data, mime_type) = first_image(&result);
+    assert_eq!(mime_type, "image/png");
+    let delivered = crate::image_utils::png_dimensions(&BASE64.decode(data).unwrap()).unwrap();
+    assert_eq!(delivered, (100, 50));
+    assert_eq!(snapshot["screenshot_width"], 100);
+    assert_eq!(snapshot["screenshot_height"], 50);
+    assert_eq!(snapshot["screenshot"]["viewport_css_width"], 200.0);
+    assert_eq!(snapshot["screenshot"]["pixel_to_css_scale_x"], 2.0);
+    assert_eq!(snapshot["screenshot"]["pixel_to_css_scale_y"], 2.0);
+}
+
+#[tokio::test]
+async fn requested_tab_screenshot_refuses_an_unusable_long_edge_cap() {
+    let f = fixture().await;
+    for (value, shown) in [
+        (json!(-1), "-1"),
+        (json!(1.5), "1.5"),
+        (json!("wide"), "\"wide\""),
+        (json!(u64::from(u32::MAX) + 1), "4294967296"),
+    ] {
+        let result = tab_screenshot(&f, json!({"max_image_dimension": value})).await;
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(structured(&result)["code"], "invalid_arguments");
+        assert_eq!(
+            structured(&result)["detail"],
+            format!("max_image_dimension must be an integer from 0 to 4294967295, got {shown}")
+        );
+    }
+    assert!(recorded_calls(&f, "Page.captureScreenshot").is_empty());
+}
+
+/// A 200x100 CSS viewport scrolled to (30, 400), captured as a 400x200 PNG.
+async fn scrolled_clip_fixture() -> Fixture {
+    fixture_with(|state| {
+        state.viewport_css_width = 200.0;
+        state.viewport_css_height = 100.0;
+        state.viewport_page_x = 30.0;
+        state.viewport_page_y = 400.0;
+        state.screenshot_data = screenshot_png_base64(80, 40);
+    })
+    .await
+}
+
+#[tokio::test]
+async fn screenshot_clip_offsets_the_capture_by_the_scroll_position() {
+    let f = scrolled_clip_fixture().await;
+    let result = tab_screenshot(
+        &f,
+        json!({"screenshot_clip": {"x": 10, "y": 20, "width": 40, "height": 20}}),
+    )
+    .await;
+    let snapshot = structured(&result);
+    assert_eq!(snapshot["status"], "ok", "{snapshot}");
+    let capture = recorded_calls(&f, "Page.captureScreenshot");
+    assert_eq!(capture.len(), 1, "{capture:?}");
+    assert_eq!(
+        capture[0].1["clip"],
+        json!({"x": 40.0, "y": 420.0, "width": 40.0, "height": 20.0, "scale": 1.0})
+    );
+    assert_eq!(capture[0].1["captureBeyondViewport"], false);
+    let shot = &snapshot["screenshot"];
+    assert_eq!(shot["scope"], "clip");
+    assert_eq!(
+        shot["clip"],
+        json!({"x": 10.0, "y": 20.0, "width": 40.0, "height": 20.0})
+    );
+    assert_eq!(shot["clip_clamped"], false);
+    assert_eq!(shot["coordinate_space"], "viewport_css_px");
+    assert_eq!(shot["viewport_css_width"], 200.0);
+    assert_eq!(shot["viewport_css_height"], 100.0);
+    // The endpoint returned 80x40 device pixels for a 40x20 CSS region.
+    assert_eq!(shot["pixel_to_css_scale_x"], 0.5);
+    assert_eq!(shot["pixel_to_css_scale_y"], 0.5);
+    let state = f.state.lock().unwrap();
+    assert!(state.calls.iter().all(|(_, method, _)| {
+        method != "Target.activateTarget" && method != "Page.bringToFront"
+    }));
+}
+
+#[tokio::test]
+async fn screenshot_clip_cuts_a_region_that_runs_past_the_viewport() {
+    let f = scrolled_clip_fixture().await;
+    let result = tab_screenshot(
+        &f,
+        json!({"screenshot_clip": {"x": 150, "y": 60, "width": 100, "height": 100}}),
+    )
+    .await;
+    let snapshot = structured(&result);
+    assert_eq!(snapshot["status"], "ok", "{snapshot}");
+    let capture = recorded_calls(&f, "Page.captureScreenshot");
+    assert_eq!(
+        capture[0].1["clip"],
+        json!({"x": 180.0, "y": 460.0, "width": 50.0, "height": 40.0, "scale": 1.0})
+    );
+    assert_eq!(
+        snapshot["screenshot"]["clip"],
+        json!({"x": 150.0, "y": 60.0, "width": 50.0, "height": 40.0})
+    );
+    assert_eq!(snapshot["screenshot"]["clip_clamped"], true);
+}
+
+#[tokio::test]
+async fn screenshot_clip_refuses_a_region_with_no_visible_part() {
+    let f = scrolled_clip_fixture().await;
+    for clip in [
+        json!({"x": 200, "y": 0, "width": 10, "height": 10}),
+        json!({"x": 0, "y": 150, "width": 10, "height": 10}),
+        json!({"x": 199.5, "y": 0, "width": 10, "height": 10}),
+        json!({"x": 0, "y": 0, "width": 0.5, "height": 10}),
+    ] {
+        let result = tab_screenshot(&f, json!({"screenshot_clip": clip})).await;
+        assert_eq!(result.is_error, Some(true), "{clip}");
+        assert_eq!(structured(&result)["code"], "invalid_arguments");
+        assert_eq!(
+            structured(&result)["detail"],
+            "screenshot_clip lies outside the 200x100 viewport"
+        );
+    }
+    assert!(recorded_calls(&f, "Page.captureScreenshot").is_empty());
+}
+
+#[tokio::test]
+async fn screenshot_clip_combines_with_jpeg_downscale_and_screenshot_only() {
+    let f = scrolled_clip_fixture().await;
+    let (target, tab) = bind(&f).await;
+    let snap = snapshot(&f, &target, &tab).await;
+    let button = ref_of(&snap, "main", "main-btn");
+    let result = GetBrowserStateTool::new(f.engine.clone())
+        .invoke(json!({
+            "target_id": target,
+            "tab_id": tab,
+            "session": SESSION,
+            "include_snapshot": false,
+            "include_screenshot": true,
+            "screenshot_format": "jpeg",
+            "screenshot_quality": 80,
+            "max_image_dimension": 20,
+            "screenshot_clip": {"x": 0, "y": 0, "width": 40, "height": 20}
+        }))
+        .await;
+    let shot = structured(&result);
+    assert_eq!(shot["status"], "ok", "{shot}");
+    assert_eq!(shot["mode"], "screenshot");
+    assert_eq!(first_image(&result).1, "image/jpeg");
+    assert_eq!(shot["screenshot_width"], 20);
+    assert_eq!(shot["screenshot_height"], 10);
+    assert_eq!(shot["screenshot"]["scope"], "clip");
+    assert_eq!(shot["screenshot"]["pixel_to_css_scale_x"], 2.0);
+    assert_eq!(shot["screenshot"]["pixel_to_css_scale_y"], 2.0);
+    f.engine
+        .store
+        .resolve_ref(SESSION, &target, &tab, &button)
+        .expect("ref from the earlier snapshot stays valid");
+}
+
+#[tokio::test]
+async fn viewport_screenshot_reports_no_clip() {
+    let f = scrolled_clip_fixture().await;
+    let result = tab_screenshot(&f, json!({})).await;
+    let shot = &structured(&result)["screenshot"];
+    assert_eq!(shot["scope"], "viewport");
+    assert!(shot.get("clip").is_none(), "{shot}");
+    assert!(shot.get("clip_clamped").is_none(), "{shot}");
+    let capture = recorded_calls(&f, "Page.captureScreenshot");
+    assert_eq!(
+        capture[0].1["clip"],
+        json!({"x": 30.0, "y": 400.0, "width": 200.0, "height": 100.0, "scale": 1.0})
+    );
+}
+
 #[tokio::test]
 async fn semantic_continuation_is_opaque_single_use_and_reaches_offscreen_content() {
     let f = fixture_with(|st| st.semantic_large_page = true).await;
@@ -2561,6 +2871,162 @@ async fn navigation_targets_an_inactive_tab_without_activating_it() {
     );
     assert!(recorded_calls(&f, "Page.bringToFront").is_empty());
     assert!(recorded_calls(&f, "Target.activateTarget").is_empty());
+}
+
+#[tokio::test]
+async fn motion_policy_leaves_an_embedded_application_tab_unemulated() {
+    // The default fixture binds an embedded application, which the reduced
+    // motion policy must leave alone (#4557).
+    let f = fixture().await;
+    let (target, tab) = bind(&f).await;
+    let result = BrowserMotionPolicyTool::new(f.engine.clone())
+        .invoke(json!({
+            "target_id": target,
+            "tab_id": tab,
+            "mode": "reduce",
+            "session": SESSION,
+        }))
+        .await;
+
+    let refused = structured(&result);
+    assert_eq!(refused["status"], "refused", "{refused}");
+    assert_eq!(refused["refusal"]["code"], "browser_wrong_target_refused");
+    assert_eq!(
+        refused["refusal"]["detail"]["reason"],
+        "motion_policy_driver_owned_only"
+    );
+    assert!(recorded_calls(&f, "Emulation.setEmulatedMedia").is_empty());
+}
+
+/// Bind a driver-owned tab in its own session and return a caller for
+/// `browser_motion_policy` on it.
+#[cfg(unix)]
+async fn driver_owned_motion_tab(
+    f: &Fixture,
+    session: &'static str,
+) -> impl Fn(&'static str) -> std::pin::Pin<Box<dyn std::future::Future<Output = ToolResult> + Send>>
+{
+    let mut stand_in = std::process::Command::new("sleep");
+    stand_in.arg("30");
+    std::os::unix::process::CommandExt::process_group(&mut stand_in, 0);
+    f.engine
+        .adopt_driver_owned_browser_for_test(session, 1, stand_in.spawn().unwrap())
+        .await;
+    let bound = structured(
+        &GetBrowserStateTool::new(f.engine.clone())
+            .invoke(json!({ "pid": 1, "window_id": 7, "session": session }))
+            .await,
+    )
+    .clone();
+    assert_eq!(bound["status"], "ok", "{bound}");
+    let target = bound["target_id"].as_str().unwrap().to_owned();
+    let tab = bound["tabs"][0]["tab_id"].as_str().unwrap().to_owned();
+    let engine = f.engine.clone();
+    move |mode| {
+        let tool = BrowserMotionPolicyTool::new(engine.clone());
+        let args = json!({
+            "target_id": target,
+            "tab_id": tab,
+            "mode": mode,
+            "session": session,
+        });
+        Box::pin(async move { tool.invoke(args).await })
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn motion_policy_clears_the_override_on_the_session_that_set_it() {
+    // Chromium drops an emulated media override only on the session that
+    // set it, and every call attaches a fresh tab session (#4557).
+    const MOTION_SESSION: &str = "run-v2-motion-policy";
+    let f = fixture().await;
+    let policy = driver_owned_motion_tab(&f, MOTION_SESSION).await;
+
+    let reduced = structured(&policy("reduce").await).clone();
+    assert_eq!(reduced["status"], "ok", "{reduced}");
+    assert_eq!(reduced["prefer_reduced_motion"], true);
+    let cleared = structured(&policy("default").await).clone();
+    assert_eq!(cleared["status"], "ok", "{cleared}");
+    assert_eq!(cleared["prefer_reduced_motion"], false);
+    let cleared_again = structured(&policy("default").await).clone();
+    assert_eq!(cleared_again["status"], "ok", "{cleared_again}");
+
+    let calls = recorded_calls(&f, "Emulation.setEmulatedMedia");
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert_eq!(calls[0].1["features"][0]["value"], "reduce");
+    assert_eq!(calls[1].1["features"], json!([]));
+    assert_eq!(calls[0].0, calls[1].0, "{calls:?}");
+    crate::session::fire_session_end(MOTION_SESSION);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn motion_policy_clears_on_the_session_of_a_reduce_whose_reply_was_lost() {
+    // A failed reply does not prove the override was not applied, so a
+    // later default must still clear it on that session (#4557).
+    const MOTION_SESSION: &str = "run-v2-motion-policy-lost-reply";
+    let f = fixture().await;
+    let policy = driver_owned_motion_tab(&f, MOTION_SESSION).await;
+
+    f.state.lock().unwrap().fail_next_emulated_media = true;
+    let failed = policy("reduce").await;
+    assert_eq!(failed.is_error, Some(true));
+    let cleared = structured(&policy("default").await).clone();
+    assert_eq!(cleared["status"], "ok", "{cleared}");
+
+    let calls = recorded_calls(&f, "Emulation.setEmulatedMedia");
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert_eq!(calls[1].1["features"], json!([]));
+    assert_eq!(calls[0].0, calls[1].0, "{calls:?}");
+    crate::session::fire_session_end(MOTION_SESSION);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn motion_policy_moves_off_a_holder_session_chromium_no_longer_knows() {
+    // A holder whose detach went unseen must not wedge the tool: Chromium's
+    // session-not-found answer proves its override is gone (#4557).
+    const MOTION_SESSION: &str = "run-v2-motion-policy-gone-holder";
+    let f = fixture().await;
+    let policy = driver_owned_motion_tab(&f, MOTION_SESSION).await;
+
+    let first = structured(&policy("reduce").await).clone();
+    assert_eq!(first["status"], "ok", "{first}");
+    let first_session = recorded_calls(&f, "Emulation.setEmulatedMedia")[0]
+        .0
+        .clone();
+    f.state
+        .lock()
+        .unwrap()
+        .gone_sessions
+        .push(first_session.clone().unwrap());
+    let moved = structured(&policy("reduce").await).clone();
+    assert_eq!(moved["status"], "ok", "{moved}");
+    let cleared = structured(&policy("default").await).clone();
+    assert_eq!(cleared["status"], "ok", "{cleared}");
+
+    let calls = recorded_calls(&f, "Emulation.setEmulatedMedia");
+    assert_eq!(calls.len(), 4, "{calls:?}");
+    assert_eq!(calls[1].0, first_session, "{calls:?}");
+    assert_ne!(calls[2].0, first_session, "{calls:?}");
+    assert_eq!(calls[2].1["features"][0]["value"], "reduce");
+    assert_eq!(calls[3].0, calls[2].0, "{calls:?}");
+    assert_eq!(calls[3].1["features"], json!([]));
+
+    // A default whose holder is gone succeeds and forgets it.
+    let again = structured(&policy("reduce").await).clone();
+    assert_eq!(again["status"], "ok", "{again}");
+    let holder = recorded_calls(&f, "Emulation.setEmulatedMedia")[4]
+        .0
+        .clone();
+    f.state.lock().unwrap().gone_sessions.push(holder.unwrap());
+    let cleared_gone = structured(&policy("default").await).clone();
+    assert_eq!(cleared_gone["status"], "ok", "{cleared_gone}");
+    let none_left = structured(&policy("default").await).clone();
+    assert_eq!(none_left["status"], "ok", "{none_left}");
+    assert_eq!(recorded_calls(&f, "Emulation.setEmulatedMedia").len(), 6);
+    crate::session::fire_session_end(MOTION_SESSION);
 }
 
 #[tokio::test]

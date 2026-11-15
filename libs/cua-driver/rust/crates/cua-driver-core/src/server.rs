@@ -304,6 +304,7 @@ pub enum ToolOperation {
     BrowserBind,
     BrowserSnapshotDomRefsV1,
     BrowserSnapshotSemanticV2,
+    BrowserScreenshot,
     BrowserClickTrusted,
     BrowserClickDomEvent,
     BrowserTypeInsertText,
@@ -337,6 +338,7 @@ impl ToolOperation {
             Self::BrowserBind => "browser_bind",
             Self::BrowserSnapshotDomRefsV1 => "browser_snapshot_dom_refs_v1",
             Self::BrowserSnapshotSemanticV2 => "browser_snapshot_semantic_v2",
+            Self::BrowserScreenshot => "browser_screenshot",
             Self::BrowserClickTrusted => "browser_click_trusted",
             Self::BrowserClickDomEvent => "browser_click_dom_event",
             Self::BrowserTypeInsertText => "browser_type_insert_text",
@@ -375,7 +377,16 @@ pub fn tool_operation(tool_name: &str, args: Option<&serde_json::Value>) -> Tool
             _ => ToolOperation::Other,
         },
         "get_browser_state" => {
-            if string_arg("target_id").is_some() {
+            // Observation runs before schema coercion, so a string "false"
+            // is the same request as the boolean.
+            let screenshot_only = match args.and_then(|value| value.get("include_snapshot")) {
+                Some(serde_json::Value::Bool(include)) => !include,
+                Some(serde_json::Value::String(text)) => text.trim().eq_ignore_ascii_case("false"),
+                _ => false,
+            };
+            if string_arg("target_id").is_some() && screenshot_only {
+                ToolOperation::BrowserScreenshot
+            } else if string_arg("target_id").is_some() {
                 match string_arg("snapshot_format") {
                     Some("semantic_v2") => ToolOperation::BrowserSnapshotSemanticV2,
                     None | Some("dom_refs_v1") => ToolOperation::BrowserSnapshotDomRefsV1,
@@ -481,6 +492,7 @@ pub fn is_computer_action(tool_name: &str, operation: ToolOperation) -> bool {
                         | "window.activate"
                         | "window.frame.set"
                         | "browser.navigate"
+                        | "browser.motion.policy"
                         | "browser.input.click"
                         | "browser.input.type"
                 )
@@ -690,6 +702,7 @@ fn structured_refusal_code(tool_name: &str, result: Option<&serde_json::Value>) 
         "get_browser_state"
             | "browser_prepare"
             | "browser_navigate"
+            | "browser_motion_policy"
             | "browser_click"
             | "browser_type"
             | "browser_dialog"
@@ -1438,6 +1451,28 @@ mod observation_tests {
     }
 
     #[test]
+    fn motion_policy_wrong_target_refusal_has_closed_telemetry_without_private_details() {
+        let response = serde_json::json!({
+            "structuredContent": {
+                "status": "refused",
+                "refusal": {
+                    "code": "browser_wrong_target_refused",
+                    "message": "private target description",
+                    "detail": {"target": "private target id"}
+                }
+            }
+        });
+        assert_eq!(
+            structured_refusal_code("browser_motion_policy", Some(&response)),
+            ToolRefusalCode::BrowserWrongTargetRefused
+        );
+        assert_eq!(
+            structured_refusal_code("unknown_motion_policy", Some(&response)),
+            ToolRefusalCode::None
+        );
+    }
+
+    #[test]
     fn browser_refusals_preserve_protocol_success_without_retaining_content() {
         let response = Response::ok(
             serde_json::json!(1),
@@ -1679,6 +1714,34 @@ mod observation_tests {
         assert_eq!(
             ToolOperation::BrowserSnapshotSemanticV2.as_str(),
             "browser_snapshot_semantic_v2"
+        );
+        assert_eq!(
+            ToolOperation::BrowserScreenshot.as_str(),
+            "browser_screenshot"
+        );
+    }
+
+    #[test]
+    fn screenshot_only_browser_reads_have_their_own_operation() {
+        use serde_json::{json, Value};
+        for include_snapshot in [json!(false), json!("false"), json!(" FALSE ")] {
+            let args = json!({"target_id": "bt-1", "tab_id": "tab-1", "include_snapshot": include_snapshot});
+            assert_eq!(
+                tool_operation("get_browser_state", Some(&args)),
+                ToolOperation::BrowserScreenshot
+            );
+        }
+        for include_snapshot in [json!(true), json!("true"), Value::Null] {
+            let args = json!({"target_id": "bt-1", "tab_id": "tab-1", "include_snapshot": include_snapshot});
+            assert_eq!(
+                tool_operation("get_browser_state", Some(&args)),
+                ToolOperation::BrowserSnapshotDomRefsV1
+            );
+        }
+        let bind = json!({"pid": 1, "window_id": 2, "include_snapshot": false});
+        assert_eq!(
+            tool_operation("get_browser_state", Some(&bind)),
+            ToolOperation::BrowserBind
         );
     }
 }

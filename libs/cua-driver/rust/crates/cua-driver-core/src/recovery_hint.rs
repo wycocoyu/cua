@@ -482,6 +482,15 @@ static RULES: &[Rule] = &[
         },
     },
     Rule {
+        codes: &["session_owned_by_other_transport"],
+        build: |_| {
+            RecoveryHint::new(
+                "That session is live on another connection, so it has not ended and start_session with \
+                 its label is refused too. Make the call from that connection, or use a new session label.",
+            )
+        },
+    },
+    Rule {
         codes: &["session_not_started", "session_required"],
         build: |c| {
             let mut arguments = Map::new();
@@ -859,8 +868,8 @@ fn background_unavailable(c: &Ctx) -> RecoveryHint {
         )
         .call(c.look_at_window()),
         (_, Some("drag_and_drop_session")) => RecoveryHint::new(format!(
-            "No drop landed: macOS drag-and-drop needs the real pointer. Try a route that is not a drag \
-             first (Move button, menu item, shortcut). {foreground}"
+            "No drop landed: the drag-and-drop session did not end at the drop point. Try a route that \
+             is not a drag first (Move button, menu item, shortcut). {foreground}"
         ))
         .call(c.read_window()),
         (_, Some("electron_main_process_unavailable")) => RecoveryHint::new(format!(
